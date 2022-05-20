@@ -1,0 +1,293 @@
+Skip to content
+Search or jump to…
+Pull requests
+Issues
+Marketplace
+Explore
+
+@keyegon 
+Berndatte
+/
+   ICRW_project
+Private
+Code
+Issues
+Pull requests
+Actions
+Projects
+Security
+Insights
+ICRW_project/Main_script.R
+@Berndatte
+Berndatte First merge of climate data and DHS data.
+Latest commit 0f5d1fd 2 hours ago
+History
+1 contributor
+266 lines (193 sloc)  8.08 KB
+
+
+library(dplyr)
+library(tidyr)
+
+#================================Climate Data===============================================
+
+# A function to load climate data ----
+
+climate.data.fun <- function(country = "Kenya", 
+                             town, 
+                             community ='re', 
+                             temporal_api = "daily",
+                             lonlat,
+                             dates = c("1987-01-01", "2022-03-31")){
+   
+   # install.packages('pacman')
+   pacman::p_load(nasapower, dplyr, stringr, maps, purrr)
+   
+   parameters <-
+      c("T2M",
+        "T2M_RANGE",
+        "T2M_MAX",
+        "T2M_MIN",
+        "QV2M",
+        "RH2M",
+        "PRECTOTCORR")
+   
+   city <-
+      world.cities %>% filter(
+         country.etc == str_to_title(country) &
+            name %in% str_to_title(town)
+      )
+   
+   `%notin%` <- negate(`%in%`)
+   city.not.in.town <- town[town %notin% city$name]
+   if(length(city.not.in.town)>0) print(paste0('Town with Lat & Long not available: ', city.not.in.town))
+   
+   if (nrow(city) > 0) {
+      dt2 <- data.frame()
+      
+      for (t in 1:nrow(city)) {
+         coordinates <- c(city$long[t], city$lat[t])
+         
+         dt1 <- get_power(
+            community = community,
+            pars = parameters,
+            temporal_api = temporal_api,
+            lonlat = coordinates,
+            dates = dates
+         ) %>%
+            mutate(city = city$name[t])
+         
+         dt2 <- dt2 %>%
+            bind_rows(dt1)
+      }
+      
+   } else {
+      print(paste0('The citi[es]: ', town, ' is/are not in Country: ', country))
+   }
+   
+   dt2
+}
+
+# Creating a vector of all main cities in each County ----
+
+town. <- c("Baringo","Bomet","Bungoma","Busia","Embu","Garissa","Homa Bay","Isiolo",
+           "Kajiado","Kakamega","Kericho","Kiambu","Kilifi","Kerugoya","Kisii",
+           "Kisumu","Kitui","Kwale","Laikipia","Lamu","Machakos","Makueni","Mandera",
+           "Marsabit","Meru","Migori","Mombasa","Murang'a","Nairobi","Nakuru","Nandi",
+           "Narok","Nyamira","Ol Kalou","Nyeri","Maralal","Siaya","Taveta",
+           "Tana River","Chuka","Kitale","Lodwar","Eldoret","Vihiga",
+           "Wajir","Kapenguria")
+
+# pulling climate data for all those cities from the website ----
+
+climate.dat <- climate.data.fun(town = town.)
+
+# Renaming climate.dat variables ----
+cnames <- c("temp", "temp.range","temp.max","temp.min","specific.humid","relative.humid", "precip.corrected")
+names(climate.dat)[8:14] <- cnames
+
+
+# Creating vectors of those main cities in each county to groups of Regions ----
+
+`North Eastern` <- c("Garissa","Wajir", "Mandera")
+Coast <- c("Mombasa", "Kwale", "Kilifi", "Tana River", "Lamu", "Taveta")
+Eastern <- c("Marsabit", "Isiolo", "Meru", "Chuka", "Embu", "Kitui", "Machakos", "Makueni")
+Western <- c("Kakamega", "Vihiga", "Bungoma", "Busia")
+Nyanza <- c("Siaya", "Kisumu", "Homa Bay", "Migori", "Kisii", "Nyamira")
+Nairobi <- c("Nairobi")
+`Rift Valley` <- c("Lodwar", "Kapenguria", "Maralal", "Kitale", "Eldoret", "Nandi", "Baringo", "Laikipia", "Nakuru", "Narok", "Kajiado", "Kericho", "Bomet")
+Central <- c("Ol kalou","Nyeri", "Kerugoya","Murang'a", "Kiambu")
+
+Region <- list(Coast = Coast, `North Eastern` = `North Eastern`,Eastern= Eastern,Central= Central, `Rift Valley`=`Rift Valley`, Western = Western,Nyanza = Nyanza, Nairobi = Nairobi)
+
+# creating a dataframe with Region and City varibles
+region.city <- tibble::tribble(
+   ~Region, ~city,
+   'Coast', Coast,
+   'North Eastern', `North Eastern`,
+   'Eastern', Eastern,
+   'Central' , Central,
+   'Rift Valley', `Rift Valley`,
+   'Western', Western,
+   'Nyanza', Nyanza,
+   'Nairobi', Nairobi
+) %>%
+   unnest(cols = city)
+
+
+# Merging the climate.dat dataset and Region.city dataset ----
+
+climate.dat <- left_join(climate.dat, region.city, by='city')
+
+# Calculating average of all climate parameters per city in each Region Per Year ----
+
+avg.city.yr. <- climate.dat %>%
+   group_by(Region, city, YEAR) %>%
+   summarise(across(.cols = temp:precip.corrected,
+                    .fns = mean), .groups = 'drop')
+
+
+# Calculating average of all parameters in each Region per year ----
+
+avg.Region.yr <- avg.city.yr. %>%
+   group_by(Region, YEAR) %>%
+   summarise(across(.cols = temp:precip.corrected,
+                    .fns = mean), .groups = 'drop')
+
+#===========================DHS Data================================================
+
+library(dplyr)
+library(rdhs)
+set_rdhs_config(email = "rdhs.keyegon@gmail.com",
+                project = "sexual and reproductive health and rights (SRHR) and women’s economic empowerment (WEE) research")
+
+## You can either tagIds or indicatorsIds to pull the data 
+
+# A function to load the dhs data ----
+load.dhs.data.fun <- function(countryIds,
+                              indicatorIds,
+                              tagIds,
+                              surveyYearStart) {
+   dat <-
+      if (!missing(indicatorIds) & missing(tagIds)) {
+         dhs_data(
+            countryIds = countryIds,
+            indicatorIds = indicatorIds,
+            surveyYearStart = surveyYearStart,
+            breakdown = "subnational"
+         )
+         
+      } else if (missing(indicatorIds) & !missing(tagIds)) {
+         dhs_data(
+            countryIds = countryIds,
+            tagIds = tagIds,
+            surveyYearStart = surveyYearStart,
+            breakdown = "subnational"
+         )
+         
+      }
+   
+   dat
+}
+
+# Loading data of contraception indicator Ids ----
+
+contraceptives <- load.dhs.data.fun(
+   countryIds = "KE",
+   indicatorIds = c("FP_CUSA_W_ANY", "FP_CUSM_W_ANY", "FP_CUSU_W_ANY"),
+   surveyYearStart =  "1989"
+)
+
+# Selecting the variables needed ----
+
+contraceptives.dataset <- contraceptives%>%
+   select(Indicator, Value, SurveyYear, IndicatorId,CharacteristicLabel)
+
+# Loading data of Immunization Tag
+Immunization <- load.dhs.data.fun(tagIds = 32,
+                                  countryIds = "KE",
+                                  surveyYearStart = "1998")
+
+
+# Selecting the variables needed ----
+
+Immunization.dataset <- Immunization%>%
+   select(Indicator, Value, SurveyYear, IndicatorId,CharacteristicLabel)
+
+#Loading the antropometry data
+
+# This data contains the weight of the children ----
+
+anthropometry <- load.dhs.data.fun(tagIds = 14,
+                                   countryIds = "KE",
+                                   surveyYearStart = "1998")
+
+anthropometry<- anthropometry[grepl("Children", anthropometry$Indicator),]
+
+anthropometry.dataset <- anthropometry%>%
+   select(Indicator, Value, SurveyYear, IndicatorId,CharacteristicLabel)
+
+# Loading the antenatal data ----
+
+#Percent distribution of number of antenatal care visits,
+#and of timing of first antenatal visit
+
+antenatal <- load.dhs.data.fun(
+   countryIds = "KE",
+   indicatorIds = c(
+      "RH_ANCN_W_NON",
+      "RH_ANCN_W_N01",
+      "RH_ANCN_W_N23",
+      "RH_ANCN_W_N4P",
+      "RH_ANCN_W_DKM",
+      "RH_ANCT_W_NON",
+      "RH_ANCT_W_TL4",
+      "RH_ANCT_W_T45",
+      "RH_ANCT_W_T67",
+      "RH_ANCT_W_T8P",
+      "RH_ANCT_W_DKM"
+   ),
+   surveyYearStart = 1989
+)
+
+
+
+antenatal.dataset <- antenatal%>%
+   select(Indicator, Value, SurveyYear, IndicatorId,CharacteristicLabel)
+
+#Loading the child mortality data ----
+
+#Mortality_rate contains these other variables
+# "Stillbirths"                                             
+# "Early neonatal deaths"                                   
+# "Perinatal mortality rate (5 years)"                      
+# "Number of pregnancies of 7+ months duration"             
+# "Number of pregnancies of 7+ months duration (unweighted)"
+
+mortality_rate <- load.dhs.data.fun(tagIds = 75,
+                                    countryIds = "KE",
+                                    surveyYearStart = "1998")
+
+
+mortality.rate.dataset <- mortality_rate%>%
+   select(Indicator, Value, SurveyYear, IndicatorId,CharacteristicLabel)
+
+
+# Merging all dhs datasets ----
+
+dhs.dataset <- do.call("rbind", list(contraceptives.dataset,Immunization.dataset,
+                                     anthropometry.dataset, antenatal.dataset,
+                                     mortality.rate.dataset ))
+
+# Renaming CharacteristicLabel variable ----
+
+dhs.dataset <- dhs.dataset%>%
+   rename(Region = CharacteristicLabel)
+
+#####==========Merging the Average Climate dataset per Region and the main DHS dataset
+
+dataset.main <- full_join(avg.Region.yr, dhs.dataset, 
+                          by =c("YEAR"="SurveyYear", "Region" = "Region"))
+
+
+
